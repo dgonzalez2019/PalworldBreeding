@@ -45,7 +45,7 @@ export function findBreedingPlan(data, ownedKeys, targetKey, requiredKeys = []) 
   let guard = 0;
   while (changed && guard++ < 64) {
     changed = false;
-    for (const [a, b, child] of pairs) {
+    for (const { a, b, child } of pairs) {
       const ca = cost.get(a), cb = cost.get(b);
       if (!ca || !cb) continue;
       const useBits = (bitOf.get(a) || 0) | (bitOf.get(b) || 0);

@@ -1,13 +1,21 @@
 // Core breeding engine. Works in two modes, selected by the data file:
 //
-//  - "table" mode: the data file carries an explicit (parentA, parentB) -> child
-//    table (exhaustive datamined dump). Lookups are exact.
-//  - "rank" mode: each pal carries a combiRank ("breeding power"). The child of a
-//    pair is the breedable pal whose rank is closest to floor((rankA+rankB+1)/2),
-//    except: same-species pairs always give that species, unique combos override
-//    everything, and unique-only pals (legendaries/variants) never appear as a
-//    generic nearest-rank result. This is the algorithm Palworld itself uses
-//    (unchanged in 1.0 — only the rank values and unique combos were revised).
+//  - "rank" mode (current dataset, scraped from palworld.gg's own calculator):
+//    each pal carries a combiRank ("breeding power") and combiPriority. The
+//    child of a pair is resolved exactly like the game (and palworld.gg) does:
+//      1. unique combos first — specific parent pairs, optionally gender-locked
+//         (ga/gb = required gender of each parent), always win;
+//      2. same species -> same species;
+//      3. otherwise: the pal in the "generic pool" whose combiRank is closest
+//         to floor((rankA + rankB + 1) / 2); on a distance tie the pal with the
+//         HIGHER combiPriority wins. The generic pool excludes uniqueOnly pals
+//         (unique-combo children and ignoreCombi pals like legendaries).
+//
+//  - "table" mode (legacy seed datasets): an explicit exhaustive
+//    (parentA, parentB) -> child table; lookups are exact.
+//
+// parentsOf/allPairs return objects: {a, b, ga?, gb?} / {a, b, child, ga?, gb?}
+// — ga/gb are present only when the result requires specific parent genders.
 
 export class BreedingData {
   constructor(raw) {
@@ -16,9 +24,11 @@ export class BreedingData {
     this.pals = raw.pals;
     this.byKey = new Map(raw.pals.map((p) => [p.key, p]));
 
-    // stable paldex ordering, used for display and rank-mode tie-breaking
+    // stable paldex ordering, used for display (crossover pals sort last)
     this.ordered = [...raw.pals].sort(
-      (a, b) => a.paldex - b.paldex || (a.suffix || '').localeCompare(b.suffix || '')
+      (a, b) => (a.paldex ?? 10000) - (b.paldex ?? 10000) ||
+        (a.suffix || '').localeCompare(b.suffix || '') ||
+        a.name.localeCompare(b.name)
     );
     this.orderIndex = new Map(this.ordered.map((p, i) => [p.key, i]));
 
@@ -32,16 +42,27 @@ export class BreedingData {
         for (const [a, b] of pairs) this._pairChild.set(pairKey(a, b), child);
       }
     } else {
-      this._uniqueByPair = new Map();
-      this._uniqueChildren = new Set();
+      // unique combos indexed by unordered parent pair, kept in file order
+      this._combosByPair = new Map();
       for (const combo of raw.uniqueCombos || []) {
-        this._uniqueByPair.set(pairKey(combo.parents[0], combo.parents[1]), combo.child);
-        this._uniqueChildren.add(combo.child);
+        const k = pairKey(combo.parents[0], combo.parents[1]);
+        if (!this._combosByPair.has(k)) this._combosByPair.set(k, []);
+        this._combosByPair.get(k).push(combo);
       }
-      // generic pool: breedable pals that are not unique-only
-      this._pool = this.breedable
-        .filter((p) => !p.uniqueOnly && p.combiRank != null)
-        .sort((a, b) => a.combiRank - b.combiRank || this.orderIndex.get(a.key) - this.orderIndex.get(b.key));
+      // generic child pool + nearest-rank lookup table (as palworld.gg builds it)
+      const pool = this.breedable.filter((p) => !p.uniqueOnly && p.combiRank != null);
+      const maxRank = Math.max(...this.breedable.map((p) => p.combiRank || 0)) + 1;
+      this._Y = new Array(maxRank + 1).fill(null);
+      for (let t = 0; t <= maxRank; t++) {
+        let best = null, bestDist = Infinity;
+        for (const p of pool) {
+          const d = Math.abs(p.combiRank - t);
+          if (d < bestDist || (d === bestDist && (p.combiPriority ?? 0) > (best.combiPriority ?? 0))) {
+            best = p; bestDist = d;
+          }
+        }
+        this._Y[t] = best;
+      }
     }
   }
 
@@ -49,59 +70,79 @@ export class BreedingData {
     return this.byKey.get(key);
   }
 
-  /** Child pal key for an (unordered) parent pair, or null if unknown/unbreedable. */
-  childOf(aKey, bKey) {
+  /**
+   * Child pal key for a parent pair, or null if unknown/unbreedable.
+   * In rank mode ga/gb are the genders of parents a/b (a few unique combos are
+   * gender-locked); the default M/F matches palworld.gg's primary result.
+   */
+  childOf(aKey, bKey, ga = 'M', gb = 'F') {
     const a = this.byKey.get(aKey), b = this.byKey.get(bKey);
     if (!a || !b || !a.breedable || !b.breedable) return null;
-    if (aKey === bKey) return aKey; // same species -> same species
 
     if (this.mode === 'table') {
+      if (aKey === bKey) return aKey;
       return this._pairChild.get(pairKey(aKey, bKey)) ?? null;
     }
 
-    const unique = this._uniqueByPair.get(pairKey(aKey, bKey));
-    if (unique) return unique;
-
-    const target = Math.floor((a.combiRank + b.combiRank + 1) / 2);
-    let best = null, bestDist = Infinity;
-    for (const p of this._pool) {
-      const d = Math.abs(p.combiRank - target);
-      if (d < bestDist) { best = p; bestDist = d; }
-      // pool is sorted by rank; once past the target and distance grows, stop
-      else if (p.combiRank > target && d > bestDist) break;
+    const genderOk = (need, have) => !need || need === have;
+    for (const c of this._combosByPair.get(pairKey(aKey, bKey)) || []) {
+      const [pa, pb] = c.parents;
+      if (
+        (pa === aKey && pb === bKey && genderOk(c.ga, ga) && genderOk(c.gb, gb)) ||
+        (pa === bKey && pb === aKey && genderOk(c.ga, gb) && genderOk(c.gb, ga))
+      ) return c.child;
     }
-    return best ? best.key : null;
+    if (aKey === bKey) return aKey;
+    return this._Y[(a.combiRank + b.combiRank + 1) >> 1]?.key ?? null;
   }
 
-  /** All unordered parent pairs [aKey, bKey] that produce the given child. */
+  /**
+   * All distinct children of a pair across parent-gender assignments:
+   * [{child, ga?, gb?}] — gender fields only when the pairing is gender-locked.
+   */
+  childrenOf(aKey, bKey) {
+    const mf = this.childOf(aKey, bKey, 'M', 'F');
+    if (!mf) return [];
+    const fm = this.childOf(aKey, bKey, 'F', 'M');
+    if (fm === mf) return [{ child: mf }];
+    return [
+      { child: mf, ga: 'M', gb: 'F' },
+      { child: fm, ga: 'F', gb: 'M' },
+    ];
+  }
+
+  /** All parent pairs producing the given child: [{a, b, ga?, gb?}] */
   parentsOf(childKey) {
     if (this.mode === 'table') {
-      return (this._parentsByChild.get(childKey) || []).map((p) => [...p]);
+      return (this._parentsByChild.get(childKey) || []).map(([a, b]) => ({ a, b }));
     }
     const out = [];
     const keys = this.breedable.map((p) => p.key);
     for (let i = 0; i < keys.length; i++) {
       for (let j = i; j < keys.length; j++) {
-        if (this.childOf(keys[i], keys[j]) === childKey) out.push([keys[i], keys[j]]);
+        for (const r of this.childrenOf(keys[i], keys[j])) {
+          if (r.child === childKey) out.push({ a: keys[i], b: keys[j], ga: r.ga, gb: r.gb });
+        }
       }
     }
     return out;
   }
 
-  /** Every unordered breedable pair with its child: [[a, b, child], ...] */
+  /** Every breedable pairing with its child: [{a, b, child, ga?, gb?}] */
   allPairs() {
     const out = [];
     if (this.mode === 'table') {
       for (const [child, pairs] of this._parentsByChild) {
-        for (const [a, b] of pairs) out.push([a, b, child]);
+        for (const [a, b] of pairs) out.push({ a, b, child });
       }
       return out;
     }
     const keys = this.breedable.map((p) => p.key);
     for (let i = 0; i < keys.length; i++) {
       for (let j = i; j < keys.length; j++) {
-        const c = this.childOf(keys[i], keys[j]);
-        if (c) out.push([keys[i], keys[j], c]);
+        for (const r of this.childrenOf(keys[i], keys[j])) {
+          out.push({ a: keys[i], b: keys[j], child: r.child, ga: r.ga, gb: r.gb });
+        }
       }
     }
     return out;

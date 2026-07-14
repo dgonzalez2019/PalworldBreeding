@@ -52,7 +52,8 @@ async function main() {
 /* ---------------- shared helpers ---------------- */
 
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
-const dexLabel = (p) => '#' + String(p.paldex).padStart(3, '0') + (p.suffix || '');
+const dexLabel = (p) => (p.paldex ? '#' + String(p.paldex).padStart(3, '0') + (p.suffix || '') : '✦');
+const gmark = (g) => (g === 'M' ? ' <span title="must be male">♂</span>' : g === 'F' ? ' <span title="must be female">♀</span>' : '');
 const typeBadges = (p) => p.types.map((t) => `<span class="type ${t}">${t}</span>`).join(' ');
 const palInline = (key) => {
   const p = data.get(key);
@@ -140,23 +141,25 @@ function setupBreedTab() {
     result.innerHTML = '';
     allBox.innerHTML = '';
     if (a && b) {
-      const child = data.childOf(a, b);
-      if (!child) {
-        result.innerHTML = `<div class="card error-card">No breeding result known for this pair (is one of them a partial-data pal?).</div>`;
+      const results = data.childrenOf(a, b);
+      if (!results.length) {
+        result.innerHTML = `<div class="card error-card">No breeding result known for this pair.</div>`;
         return;
       }
-      const cp = data.get(child);
-      result.innerHTML =
-        `<div class="card child-card">${palInline(a)} <span class="arrow">＋</span> ${palInline(b)} <span class="arrow">→</span>` +
-        `<div><div class="pal-big">${esc(cp.name)} <span class="dexno">${dexLabel(cp)}</span> ${typeBadges(cp)}</div>` +
-        `<div class="works-line">${workSummary(cp)}</div></div></div>`;
+      result.innerHTML = results.map(({ child, ga, gb }) => {
+        const cp = data.get(child);
+        return `<div class="card child-card">${palInline(a)}${gmark(ga)} <span class="arrow">＋</span> ${palInline(b)}${gmark(gb)} <span class="arrow">→</span>` +
+          `<div><div class="pal-big">${esc(cp.name)} <span class="dexno">${dexLabel(cp)}</span> ${typeBadges(cp)}</div>` +
+          `<div class="works-line">${workSummary(cp)}</div></div></div>`;
+      }).join('');
     }
     const solo = a && !b ? a : b && !a ? b : null;
     if (solo) {
-      const rows = data.breedable
-        .map((p) => [p.key, data.childOf(solo, p.key)])
-        .filter(([, c]) => c)
-        .map(([pk, c]) => `<div class="pair-row"><span>${palInline(pk)}</span><span class="x">→</span><span>${palInline(c)}</span></div>`);
+      const rows = data.breedable.flatMap((p) =>
+        data.childrenOf(solo, p.key).map(({ child, ga, gb }) =>
+          `<div class="pair-row"><span>${palInline(p.key)}${gmark(gb)}</span><span class="x">→</span><span>${palInline(child)}</span></div>`
+        )
+      );
       allBox.innerHTML =
         `<div class="count-line">${esc(data.get(solo).name)} × every partner (${rows.length} combos):</div>` +
         `<div class="pair-list">${rows.join('')}</div>`;
@@ -177,7 +180,7 @@ function setupParentsTab() {
     if (!target) return;
     let pairs = data.parentsOf(target);
     const inc = pickF.value;
-    if (inc) pairs = pairs.filter(([a, b]) => a === inc || b === inc);
+    if (inc) pairs = pairs.filter(({ a, b }) => a === inc || b === inc);
     if (!pairs.length) {
       result.innerHTML = `<div class="card">No parent combination produces ${esc(data.get(target).name)}${inc ? ' together with ' + esc(data.get(inc).name) : ''}.</div>`;
       return;
@@ -186,7 +189,7 @@ function setupParentsTab() {
     const shown = showAll ? pairs : pairs.slice(0, LIMIT);
     result.innerHTML =
       `<div class="count-line">${pairs.length} combination${pairs.length === 1 ? '' : 's'} produce${pairs.length === 1 ? 's' : ''} ${palInline(target)}:</div>` +
-      `<div class="pair-list">${shown.map(([a, b]) => `<div class="pair-row"><span>${palInline(a)}</span><span class="x">＋</span><span>${palInline(b)}</span></div>`).join('')}</div>` +
+      `<div class="pair-list">${shown.map(({ a, b, ga, gb }) => `<div class="pair-row"><span>${palInline(a)}${gmark(ga)}</span><span class="x">＋</span><span>${palInline(b)}${gmark(gb)}</span></div>`).join('')}</div>` +
       (pairs.length > shown.length ? `<p><button class="more" id="parents-more">Show all ${pairs.length}</button></p>` : '');
     document.getElementById('parents-more')?.addEventListener('click', () => { showAll = true; update(); });
   };
@@ -252,8 +255,8 @@ function setupPathTab() {
     const plan = findBreedingPlan(data, [...owned], target, required);
     if (!plan.ok) {
       resultEl.innerHTML =
-        `<div class="card error-card">${esc(plan.reason)}<br><span style="color:var(--muted)">Tip: a child’s breeding power sits between its parents’, ` +
-        `so you can never breed something rarer than the rarest pal you own — catching one stronger pal often unlocks the path.</span></div>`;
+        `<div class="card error-card">${esc(plan.reason)}<br><span style="color:var(--muted)">Tip: legendaries and some special pals can only be bred ` +
+        `from themselves or from specific unique combos — you may need to catch one (or a required parent) in the wild first.</span></div>`;
       return;
     }
     if (!plan.steps) {
@@ -298,13 +301,15 @@ function setupIndexTab() {
   typeSel.innerHTML += types.map((t) => `<option>${t}</option>`).join('');
 
   const STAT_COLS = [
-    ['hp', 'HP'], ['attack', 'Attack'], ['defense', 'Defense'], ['food', 'Food'],
-    ['stamina', 'Stamina'], ['runSpeed', 'Run'], ['rideSpeed', 'Ride'], ['transportSpeed', 'Transport'],
+    ['hp', 'HP'], ['attack', 'Attack'], ['melee', 'Melee'], ['defense', 'Defense'],
+    ['support', 'Support'], ['craftSpeed', 'Craft'], ['runSpeed', 'Run'], ['rideSpeed', 'Ride Sprint'],
+    ['stamina', 'Stamina'], ['price', 'Price'], ['rarity', 'Rarity'],
   ];
 
   const getVal = (p, key) => {
-    if (key === 'paldex') return p.paldex + (p.suffix ? 0.5 : 0);
+    if (key === 'paldex') return p.paldex == null ? null : p.paldex + (p.suffix ? 0.5 : 0);
     if (key === 'name') return p.name;
+    if (key === 'rarity') return p.rarity ?? null;
     if (key.startsWith('w:')) return p.work ? p.work[key.slice(2)] ?? null : null;
     return p.stats[key] ?? null;
   };
@@ -315,13 +320,14 @@ function setupIndexTab() {
     let rows = data.ordered.filter(
       (p) => (!needle || p.name.toLowerCase().includes(needle)) && (!type || p.types.includes(type))
     );
+    const dex = (p) => p.paldex ?? 10000;
     rows.sort((a, b) => {
       const va = getVal(a, sortKey), vb = getVal(b, sortKey);
-      if (va == null && vb == null) return a.paldex - b.paldex;
+      if (va == null && vb == null) return dex(a) - dex(b);
       if (va == null) return 1; // unknown values always sink to the bottom
       if (vb == null) return -1;
       const cmp = typeof va === 'string' ? va.localeCompare(vb) : va - vb;
-      return cmp * sortDir || a.paldex - b.paldex;
+      return cmp * sortDir || dex(a) - dex(b);
     });
 
     const cols = [['paldex', '#'], ['name', 'Name'], ['types', 'Types']];

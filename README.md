@@ -21,29 +21,25 @@ npm run serve        # http://localhost:8080
 npm test             # engine + pathfinder test suite (Node 20+)
 ```
 
-## About the data — important
+## About the data
 
-**The shipped dataset is a pre-1.0 seed, not 1.0 data.** This repo was built in a sandboxed environment whose network policy blocks game-data sites (palworld.gg, paldb.cc, the wiki — everything except package registries), and Palworld 1.0 shipped on July 10, 2026 with 72 new pals (287 total) and *revised* breeding combinations, so no offline source could provide it.
+`data/pals.json` carries **live Palworld 1.0 data from palworld.gg** — 299 pals (the full renumbered 1.0 paldeck including B-variants and the Terraria crossover pals) with breeding power (`combiRank`/`combiPriority`), all 250 unique combos (including the two gender-locked Katress/Wixen combos), combat stats, and the 12 work suitabilities. It's the same bundled game database palworld.gg's own breeding calculator runs on, and the breeding engine here mirrors that calculator's algorithm exactly:
 
-What the seed *is*: the exact datamined base-game breeding table — all 9,591 parent-pair→child results for paldex #1–111 plus 27 variants (from the `palworld-data` npm package's game-data dump), with work suitabilities, combat stats, and food values. Pals #112–126 are included with partial data (name/types/HP/ATK/DEF only, from the `palworld-pal-editor` dump; 5 missing table pairs were inferred from rank-neighborhood similarity). Everything the site shows for base-game pals is real datamined data, but **1.0 changed some combos and added pals this file doesn't have.**
+1. **unique combos** win (specific parent pairs, some gender-locked);
+2. **same species → same species**;
+3. otherwise the child is the generic-pool pal whose `combiRank` is closest to `floor((rankA + rankB + 1) / 2)` — ties go to the higher `combiPriority`, and `uniqueOnly` pals (unique-combo children, legendaries and other `ignoreCombi` pals) never appear as generic results.
 
-### Refreshing to 1.0 data
+The test suite cross-checks the engine against an independent re-implementation of that algorithm over 2,000+ pairings, plus pinned 1.0 facts (e.g. Penking + Bushi now gives Sibelyx, not Anubis).
 
-On your own machine (normal internet):
+### Refreshing the data after a game patch
 
 ```bash
-npm run scrape                    # tries palworld.gg, falls back to paldb.cc
-npm run scrape -- --dump ./dump   # keep raw HTML if extraction fails
-npm test                          # sanity-check the regenerated file
+npm run scrape                    # regenerates data/pals.json from palworld.gg
+npm run scrape -- --dump ./dump   # keep the fetched files for debugging
+npm test                          # validate the regenerated file
 ```
 
-The scraper writes `data/pals.json` in **rank mode**: each pal gets its `combiRank` (breeding power) and the site computes children with the game's own formula — child = the breedable pal whose rank is closest to `floor((rankA + rankB + 1) / 2)`, with same-species pairs, `uniqueCombos` overrides, and `uniqueOnly` exclusions (legendaries/variants that only come from special combos or same-species pairs). The 1.0 update kept this algorithm and only revised the rank values/special combos.
-
-Notes:
-
-- Both sites sit behind Cloudflare at times. If plain fetching is blocked, install playwright first (`npm i playwright && npx playwright install chromium`) — the script falls back to a real browser automatically.
-- The script was written blind against those sites (they were unreachable from the build sandbox), so extraction is defensive and may need small tweaks after a site redesign — the two extractor functions are clearly marked at the top of `scripts/scrape-palworld-gg.mjs`, and `--dump` saves the raw HTML to adapt against.
-- After scraping, review `uniqueCombos` in `data/pals.json`: special combinations (e.g. Relaxaurus + Sparkit → Relaxaurus Lux) are listed on the source sites and should be entered as `{"parents": ["85", "7"], "child": "85B"}` (keys are paldex number + optional `B` suffix). The seed's exhaustive table doesn't need them; rank mode does.
+The scraper finds palworld.gg's bundled pal-database chunk via the site's own import map, imports it, and transforms it with `scripts/transform-palworld-gg.mjs`. It uses plain `fetch` and falls back to `curl` when running behind an `HTTPS_PROXY`. If the site's bundling ever changes, the error messages say exactly where to look, and `--dump` saves everything fetched.
 
 ### Data file format
 
@@ -51,25 +47,27 @@ Notes:
 
 ```jsonc
 {
-  "breedingMode": "table",          // or "rank"
+  "breedingMode": "rank",           // or "table" (legacy: explicit pair->child map)
   "pals": [{
-    "key": "11",                    // paldex number + optional "B" variant suffix
-    "paldex": 11, "suffix": null,
+    "key": "penguin",               // palworld.gg internal id
+    "paldex": 18, "suffix": null,   // 1.0 paldeck number; null = crossover pal
     "name": "Penking", "types": ["Water", "Ice"],
     "work": { "kindling": 0, "watering": 2, /* … 12 keys … */ },
-    "stats": { "hp": 95, "attack": 95, "defense": 95, "food": 8, /* … */ },
-    "combiRank": null,              // set in rank mode
+    "stats": { "hp": 95, "attack": 95, "melee": 95, "defense": 95, "support": 100, /* … */ },
+    "combiRank": 1160, "combiPriority": 116000,
     "breedable": true,
-    "uniqueOnly": false,            // rank mode: never a generic nearest-rank child
-    "partial": false                // true = stats-only entry
+    "uniqueOnly": false,            // never a generic nearest-rank child
+    "rarity": 6
   }],
-  "breedingTable": { "childKey": [["parentA", "parentB"], …] },  // table mode
-  "uniqueCombos": [{ "parents": ["85", "7"], "child": "85B" }]   // rank mode
+  "uniqueCombos": [
+    { "parents": ["lazycatfish", "eleccat"], "child": "lazycatfish_electric" },
+    { "parents": ["catmage", "foxmage"], "child": "foxmage_dark", "ga": "M", "gb": "F" }
+  ]
 }
 ```
 
-If you'd rather import data from any other community dump than scrape, just produce this shape.
+If you'd rather import data from another community dump, just produce this shape — the site auto-detects rank vs. table mode.
 
 ## How the breeding path search works
 
-Breeding never consumes the parents, so owned and bred pals stay available. The search relaxes `cost(child) ≤ cost(parentA) + cost(parentB) + 1` over every pair until stable and reconstructs the cheapest tree (shared intermediates are bred once and counted once). Required pals use a small bitmask DP — state = (pal, subset of required pals already used as parents) — so the plan is minimal among plans that use all of them. One real-game consequence the tests pin down: a child's breeding power always lies between its parents', so you can never breed anything rarer than the rarest pal you own.
+Breeding never consumes the parents, so owned and bred pals stay available. The search relaxes `cost(child) ≤ cost(parentA) + cost(parentB) + 1` over every pair until stable and reconstructs the cheapest tree (shared intermediates are bred once and counted once). Required pals use a small bitmask DP — state = (pal, subset of required pals already used as parents) — so the plan is minimal among plans that use all of them. Fun 1.0 consequence the tests pin down: variant unique combos output far lower breeding power than their parents, so unlike pre-1.0 you *can* ladder from starter pals all the way down to rares — the pathfinder happily finds the 59-step ladder from {Lamball, Cattiva, Chikipi} to Anubis.
