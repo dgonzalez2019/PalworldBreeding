@@ -1,0 +1,12 @@
+{
+  "name": "palworld-breeding",
+  "version": "1.0.0",
+  "description": "Palworld breeding calculator, path finder, and sortable pal index (static site)",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "serve": "npx --yes serve -l 8080 .",
+    "test": "node --test tests/",
+    "scrape": "node scripts/scrape-palworld-gg.mjs"
+  }
+}

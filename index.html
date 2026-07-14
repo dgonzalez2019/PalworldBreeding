@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Palworld Breeding &amp; Pal Index</title>
+  <link rel="stylesheet" href="css/style.css">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🥚</text></svg>">
+</head>
+<body>
+  <header>
+    <h1>🥚 Palworld Breeding Lab</h1>
+    <nav id="tabs">
+      <button class="tab active" data-tab="breed">Breed Two Pals</button>
+      <button class="tab" data-tab="parents">Find Parents</button>
+      <button class="tab" data-tab="path">Breeding Path</button>
+      <button class="tab" data-tab="index">Pal Index</button>
+    </nav>
+  </header>
+
+  <div id="data-banner" class="banner" hidden></div>
+
+  <main>
+    <!-- Tab 1: combine two pals -->
+    <section id="view-breed" class="view active">
+      <p class="hint">Pick two parents to see their child. Pick just one to see every combination for that pal.</p>
+      <div class="picker-row">
+        <div class="picker-block"><label>Parent 1</label><div id="breed-a"></div></div>
+        <div class="plus">＋</div>
+        <div class="picker-block"><label>Parent 2</label><div id="breed-b"></div></div>
+      </div>
+      <div id="breed-result"></div>
+      <div id="breed-all"></div>
+    </section>
+
+    <!-- Tab 2: all combos producing a target -->
+    <section id="view-parents" class="view">
+      <p class="hint">Pick a pal to list every parent combination that produces it. Optionally filter to combos that include a specific pal.</p>
+      <div class="picker-row">
+        <div class="picker-block"><label>Target child</label><div id="parents-target"></div></div>
+        <div class="picker-block"><label>Must include (optional)</label><div id="parents-filter"></div></div>
+      </div>
+      <div id="parents-result"></div>
+    </section>
+
+    <!-- Tab 3: breeding path from owned pals -->
+    <section id="view-path" class="view">
+      <p class="hint">
+        Select the pals you own, pick a target, and get a step-by-step breeding tree.
+        Add up to 4 “required” pals to force the plan to use them as parents along the way.
+        Your owned selection is saved in this browser.
+      </p>
+      <div class="path-grid">
+        <div class="owned-panel">
+          <div class="owned-head">
+            <strong>Pals you own</strong>
+            <span id="owned-count" class="pill">0</span>
+            <input type="search" id="owned-search" placeholder="Search pals…">
+            <button id="owned-clear" class="mini">Clear</button>
+          </div>
+          <div id="owned-list" class="owned-list"></div>
+        </div>
+        <div class="target-panel">
+          <label>Target pal</label>
+          <div id="path-target"></div>
+          <label style="margin-top:12px">Required pals on the way (optional, max 4)</label>
+          <div id="path-required"></div>
+          <div id="required-chips" class="chips"></div>
+          <button id="path-go" class="primary">Find breeding path</button>
+        </div>
+      </div>
+      <div id="path-result"></div>
+    </section>
+
+    <!-- Tab 4: sortable pal index -->
+    <section id="view-index" class="view">
+      <p class="hint">Click a column header to sort (high → low, click again to flip). Use the toggle to switch between combat stats and work suitabilities.</p>
+      <div class="index-controls">
+        <input type="search" id="index-search" placeholder="Search pals…">
+        <select id="index-type"><option value="">All types</option></select>
+        <div class="seg" id="index-mode">
+          <button data-mode="stats" class="active">Stats</button>
+          <button data-mode="work">Work suitability</button>
+        </div>
+      </div>
+      <div class="table-wrap"><table id="index-table"></table></div>
+    </section>
+  </main>
+
+  <footer>
+    <span id="footer-version"></span>
+    <span>Data: datamined Palworld game data · refresh instructions in the README</span>
+  </footer>
+
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>
