@@ -43,6 +43,7 @@ async function main() {
     `Dataset: ${raw.dataVersion} (${raw.generatedAt}) · ${raw.pals.length} pals · mode: ${data.mode}`;
 
   setupTabs();
+  setupDetailModal();
   setupBreedTab();
   setupParentsTab();
   setupPathTab();
@@ -54,10 +55,13 @@ async function main() {
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const dexLabel = (p) => (p.paldex ? '#' + String(p.paldex).padStart(3, '0') + (p.suffix || '') : '✦');
 const gmark = (g) => (g === 'M' ? ' <span title="must be male">♂</span>' : g === 'F' ? ' <span title="must be female">♀</span>' : '');
+const palImg = (key, size) =>
+  `<img class="pimg" src="images/pals/${key}.png" width="${size}" height="${size}" alt="" loading="lazy" onerror="this.remove()">`;
 const typeBadges = (p) => p.types.map((t) => `<span class="type ${t}">${t}</span>`).join(' ');
 const palInline = (key) => {
   const p = data.get(key);
-  return `<span class="dexno">${dexLabel(p)}</span> <strong>${esc(p.name)}</strong> ${typeBadges(p)}`;
+  return `<span class="pal-ref" data-pal="${key}" title="Click for details">${palImg(key, 28)} ` +
+    `<span class="dexno">${dexLabel(p)}</span> <strong>${esc(p.name)}</strong> ${typeBadges(p)}</span>`;
 };
 const workSummary = (p) => {
   if (!p.work) return '<em>work data not in seed dataset</em>';
@@ -82,7 +86,7 @@ function palPicker(container, { placeholder = 'Type a pal name…', breedableOnl
     opts = pool().filter((p) => !needle || p.name.toLowerCase().includes(needle) || dexLabel(p).includes(needle));
     hl = -1;
     drop.innerHTML = opts.slice(0, 400).map((p, i) =>
-      `<div class="opt" data-i="${i}"><span class="dex">${dexLabel(p)}</span><span>${esc(p.name)}</span>${typeBadges(p)}</div>`
+      `<div class="opt" data-i="${i}">${palImg(p.key, 24)}<span class="dex">${dexLabel(p)}</span><span>${esc(p.name)}</span>${typeBadges(p)}</div>`
     ).join('') || '<div class="opt">no match</div>';
     drop.hidden = false;
   };
@@ -119,6 +123,70 @@ function palPicker(container, { placeholder = 'Type a pal name…', breedableOnl
   };
 }
 
+/* ---------------- pal detail modal ---------------- */
+
+function setupDetailModal() {
+  const overlay = document.getElementById('detail-overlay');
+  const card = document.getElementById('detail-card');
+  const close = () => { overlay.hidden = true; };
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !overlay.hidden) close(); });
+  document.addEventListener('click', (e) => {
+    const el = e.target.closest('.pal-ref');
+    if (el?.dataset.pal) openDetail(el.dataset.pal);
+    if (e.target.closest('.detail-close')) close();
+  });
+
+  function openDetail(key) {
+    const p = data.get(key);
+    if (!p) return;
+    const stat = (label, v, suffix = '') =>
+      v == null ? '' : `<div class="stat-cell">${label}<b>${v}${suffix}</b></div>`;
+    const workCells = WORK_KEYS.map(([k, icon, label]) => {
+      const v = p.work?.[k] ?? 0;
+      return `<div class="work-cell ${v ? '' : 'off'}">${icon} ${label}<b>${v ? 'Lv ' + v : '—'}</b></div>`;
+    }).join('');
+    const moves = (p.actives || []).map((m) =>
+      `<tr><td class="num">${m.level}</td><td><strong>${esc(m.name)}</strong><div class="move-desc">${esc(m.desc || '')}</div></td>` +
+      `<td><span class="type ${m.element}">${m.element}</span></td><td class="num">${m.power ?? '—'}</td><td class="num">${m.cooldown ?? '—'}s</td></tr>`
+    ).join('');
+    const drops = (p.drops || []).map((d) =>
+      `<span class="drop-chip"><b>${esc(d.name)}</b> ×${d.min === d.max ? d.min : d.min + '–' + d.max}${d.rate < 100 ? ` · ${d.rate}%` : ''}</span>`
+    ).join('');
+    card.innerHTML =
+      `<div class="detail-head">
+        ${palImg(key, 110)}
+        <div class="detail-title">
+          <h2>${esc(p.name)}</h2>
+          <div>${typeBadges(p)}</div>
+          <div class="detail-meta">
+            <span>${p.paldex ? 'Paldeck ' + dexLabel(p) : 'Crossover pal'}</span>
+            ${p.rarity ? `<span>Rarity ${p.rarity}</span>` : ''}
+            ${p.combiRank ? `<span>Breeding power ${p.combiRank}</span>` : ''}
+            ${p.uniqueOnly ? '<span>⭐ only from unique combos / same species</span>' : ''}
+          </div>
+        </div>
+        <button class="detail-close" title="Close (Esc)">✕</button>
+      </div>` +
+      (p.description ? `<div class="detail-desc">${esc(p.description)}</div>` : '') +
+      (p.partnerSkill ? `<div class="detail-sec"><h3>Partner skill</h3><div class="partner-skill"><b>${esc(p.partnerSkill.name)}</b><p>${esc(p.partnerSkill.desc)}</p></div></div>` : '') +
+      (p.passives?.length ? `<div class="detail-sec"><h3>Innate passives</h3><div class="drops-line">${p.passives.map((x) => `<span class="drop-chip"><b>${esc(x)}</b></span>`).join('')}</div></div>` : '') +
+      `<div class="detail-sec"><h3>Stats</h3><div class="stat-grid">` +
+        stat('HP', p.stats?.hp) + stat('Attack', p.stats?.attack) + stat('Melee', p.stats?.melee) +
+        stat('Defense', p.stats?.defense) + stat('Support', p.stats?.support) + stat('Craft speed', p.stats?.craftSpeed) +
+        stat('Run speed', p.stats?.runSpeed) + stat('Ride sprint', p.stats?.rideSpeed) + stat('Stamina', p.stats?.stamina) +
+        stat('Price', p.stats?.price) +
+      `</div></div>` +
+      `<div class="detail-sec"><h3>Work suitability</h3><div class="work-grid">${workCells}</div></div>` +
+      (moves ? `<div class="detail-sec"><h3>Moves (learned by level)</h3><div style="overflow-x:auto"><table class="moves-table">
+        <thead><tr><th>Lv</th><th>Move</th><th>Element</th><th>Power</th><th>CT</th></tr></thead><tbody>${moves}</tbody></table></div></div>` : '') +
+      (drops ? `<div class="detail-sec"><h3>Drops</h3><div class="drops-line">${drops}</div></div>` : '');
+    overlay.hidden = false;
+    card.scrollTop = 0;
+    overlay.scrollTop = 0;
+  }
+}
+
 /* ---------------- tabs ---------------- */
 
 function setupTabs() {
@@ -149,7 +217,8 @@ function setupBreedTab() {
       result.innerHTML = results.map(({ child, ga, gb }) => {
         const cp = data.get(child);
         return `<div class="card child-card">${palInline(a)}${gmark(ga)} <span class="arrow">＋</span> ${palInline(b)}${gmark(gb)} <span class="arrow">→</span>` +
-          `<div><div class="pal-big">${esc(cp.name)} <span class="dexno">${dexLabel(cp)}</span> ${typeBadges(cp)}</div>` +
+          `<span class="pal-ref" data-pal="${child}" title="Click for details">${palImg(child, 72)}</span>` +
+          `<div><div class="pal-big pal-ref" data-pal="${child}" title="Click for details">${esc(cp.name)} <span class="dexno">${dexLabel(cp)}</span> ${typeBadges(cp)}</div>` +
           `<div class="works-line">${workSummary(cp)}</div></div></div>`;
       }).join('');
     }
@@ -335,27 +404,28 @@ function setupIndexTab() {
     else cols.push(...WORK_KEYS.map(([k, icon, label]) => ['w:' + k, `${icon}<br>${label.split(' ')[0]}`]));
 
     table.innerHTML =
-      '<thead><tr>' +
+      '<thead><tr><th></th>' +
       cols.map(([k, label]) =>
         `<th data-k="${k}" class="${k === sortKey ? 'sorted' : ''}" title="click to sort">${label}${k === sortKey ? (sortDir === 1 ? ' ▲' : ' ▼') : ''}</th>`
       ).join('') +
       '</tr></thead><tbody>' +
       rows.map((p) => {
-        let tds = `<td class="num">${dexLabel(p)}</td><td><strong>${esc(p.name)}</strong>${p.partial ? ' <span class="dexno">(partial data)</span>' : ''}</td><td>${typeBadges(p)}</td>`;
+        let tds = `<td>${palImg(p.key, 36)}</td><td class="num">${dexLabel(p)}</td>` +
+          `<td><strong>${esc(p.name)}</strong>${p.partial ? ' <span class="dexno">(partial data)</span>' : ''}</td><td>${typeBadges(p)}</td>`;
         for (const [k] of cols.slice(3)) {
           const v = getVal(p, k);
           if (v == null) tds += '<td class="num partial">—</td>';
           else if (k.startsWith('w:')) tds += `<td class="num ${v === 0 ? 'zero' : ''}">${v > 0 ? `<span class="wk wk${Math.min(v, 4)}">${v}</span>` : '·'}</td>`;
           else tds += `<td class="num">${v}</td>`;
         }
-        return `<tr>${tds}</tr>`;
+        return `<tr class="pal-ref" data-pal="${p.key}" title="Click for details">${tds}</tr>`;
       }).join('') +
       '</tbody>';
 
     table.querySelectorAll('th').forEach((th) =>
       th.addEventListener('click', () => {
         const k = th.dataset.k;
-        if (k === 'types') return;
+        if (!k || k === 'types') return;
         if (sortKey === k) sortDir *= -1;
         else { sortKey = k; sortDir = k === 'name' || k === 'paldex' ? 1 : -1; } // numeric cols: high→low first
         render();

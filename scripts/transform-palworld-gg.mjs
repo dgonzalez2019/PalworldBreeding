@@ -69,6 +69,18 @@ export function transformPalworldGG(db, { source = 'palworld.gg' } = {}) {
       // never a generic nearest-rank child (only via unique combo / same species)
       uniqueOnly: !!(p.ignoreCombi || comboChildren.has(p.id)),
       partial: false,
+      icon: p.icon || null, // source icon name; local copy lives at images/pals/{key}.png
+      description: (p.description || '').replace(/\r\n/g, '\n'),
+      partnerSkill: p.partnerSkill?.name
+        ? { name: p.partnerSkill.name, desc: (p.partnerSkill.desc || '').replace(/\r\n/g, '\n') }
+        : null,
+      actives: (p.actives || []).map((a) => ({
+        level: a.level, name: a.name, element: ELEMENT_NAMES[a.element] || a.element,
+        power: a.power, cooldown: a.cooldown,
+        desc: (a.desc || '').replace(/\r?\n/g, ' '),
+      })),
+      passives: (p.passives || []).map((x) => (typeof x === 'string' ? x : x?.name)).filter(Boolean),
+      drops: (p.drops || []).map((dr) => ({ name: dr.name, min: dr.min, max: dr.max, rate: dr.rate })),
     }))
     .map((out, i) => {
       const raw = entries[i];

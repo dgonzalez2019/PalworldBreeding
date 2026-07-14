@@ -89,4 +89,36 @@ if (out.pals.length < 250) {
 }
 fs.writeFileSync(OUT, JSON.stringify(out));
 console.log(`Wrote ${OUT}`);
+
+// pal icons -> images/pals/{key}.png (only the ones we don't have yet)
+if (!args.includes('--no-images')) {
+  const imgDir = new URL('../images/pals/', import.meta.url).pathname;
+  fs.mkdirSync(imgDir, { recursive: true });
+  const missing = out.pals.filter((p) => p.icon && !fs.existsSync(path.join(imgDir, p.key + '.png')));
+  console.log(`Downloading ${missing.length} pal images …`);
+  let done = 0, failed = 0;
+  for (const p of missing) {
+    const url = `${BASE}/images/full_palicon/${p.icon}.png`;
+    try {
+      let buf = null;
+      try {
+        const res = await fetch(url, { headers: { 'User-Agent': UA } });
+        if (res.ok) buf = Buffer.from(await res.arrayBuffer());
+      } catch { /* fall through to curl */ }
+      if (!buf && process.env.HTTPS_PROXY) {
+        const r = spawnSync('curl', ['-sS', '--fail', '-A', UA, url],
+          { encoding: 'buffer', maxBuffer: 16 * 1024 * 1024 });
+        if (r.status === 0) buf = r.stdout;
+      }
+      if (!buf || buf.length < 100) throw new Error('empty response');
+      fs.writeFileSync(path.join(imgDir, p.key + '.png'), buf);
+      done++;
+      if (done % 50 === 0) console.log(`  ${done}/${missing.length}`);
+    } catch (e) {
+      failed++;
+      console.warn(`  image failed for ${p.name}: ${e.message}`);
+    }
+  }
+  console.log(`Images: ${done} downloaded, ${failed} failed, ${out.pals.length - missing.length} already present.`);
+}
 console.log('Run `npm test` to validate, then reload the site.');
